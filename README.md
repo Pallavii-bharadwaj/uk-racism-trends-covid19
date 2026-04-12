@@ -28,3 +28,5 @@ Python | Pandas | NumPy | Matplotlib | Seaborn | Scikit-learn | Data Governance 
 - Practised communicating sensitive findings responsibly
 
 ### 🗂️ Repository Structure
+- analysis.Rmd → R Markdown file containing data cleaning, EDA, and statistical modelling
+- evens_teaching_dataset.tab → raw dataset used for analysis
