@@ -1,0 +1,600 @@
+---
+title: "Governance of Data Science"
+output:
+  html_document:
+    theme: flatly
+  pdf_document: default
+---
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(survey)
+library(janitor)
+library(broom)
+library(knitr)
+library(kableExtra)
+
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+options(scipen = 999)
+
+nice_table <- function(df, caption = NULL, digits = 3) {
+  df %>%
+    knitr::kable(
+      format = "html",
+      caption = caption,
+      digits = digits,
+      align = "l"
+    ) %>%
+    kableExtra::kable_styling(
+      bootstrap_options = c("striped", "bordered"),
+      full_width = TRUE,
+      position = "left",
+      font_size = 14
+    )
+}
+```
+
+## Load data
+```{r load_data}
+evens <- read.delim("evens_teaching_dataset.tab", sep = "\t", stringsAsFactors = FALSE) %>%
+  clean_names()
+
+data_info <- tibble(
+  Metric = c("Rows", "Columns"),
+  Value  = c(nrow(evens), ncol(evens))
+)
+nice_table(data_info, "Table A: Dataset size (rows and columns)")
+
+w <- summary(evens$weight)
+weight_tbl <- tibble(
+  Stat  = names(w),
+  Value = as.numeric(w)
+)
+nice_table(weight_tbl, "Table B: Summary of survey weights")
+```
+```{r raw_racchng_table, echo=FALSE, results='asis'}
+racchng_counts <- table(evens$racchng, useNA = "ifany")
+
+racchng_tbl <- tibble(
+  Code  = names(racchng_counts),
+  Count = as.integer(racchng_counts)
+)
+
+nice_table(racchng_tbl, "Distribution of EVENS change-in-racism variable (racchng)")
+```
+```{r prep_vars2}
+# Items used to measure racism attitudes (from the dataset)
+racism_items <- c(
+  "racins", "neracpro", "racatt", "racedu",
+  "racpub", "racpol", "rachse", "racemp",
+  "racneigh", "racframpart"
+)
+
+# Variables we keep for analysis
+keep_vars <- c(
+  "id", "weight", "region", "ethnicity", "religion",
+  "hlqual", "income", "racchng", "blmsup",
+  racism_items
+)
+```
+```{r ethnicity_labels, echo=FALSE}
+ethnicity_labels <- c(
+  `1` = "White British",
+  `2` = "White Other",
+  `3` = "Mixed",
+  `4` = "Indian",
+  `5` = "Pakistani",
+  `6` = "Bangladeshi",
+  `7` = "Chinese",
+  `8` = "Other Asian",
+  `9` = "Black African",
+  `10` = "Black Caribbean",
+  `11` = "Other Black",
+  `12` = "Arab",
+  `13` = "Other ethnic group"
+)
+```
+```{r racism_increased}
+d <- evens %>%
+  select(any_of(keep_vars)) %>%
+  filter(!is.na(weight), weight > 0) %>%
+  mutate(
+    ethnicity = factor(ethnicity, levels = names(ethnicity_labels), labels = unname(ethnicity_labels)),
+    region    = factor(region),
+    religion  = factor(religion),
+    hlqual    = factor(hlqual),
+    income    = factor(income)
+  )
+d <- d %>%
+  mutate(
+    racism_increased = case_when(
+      racchng %in% c(1, 2) ~ 1,           # racism increased
+      racchng %in% c(3, 4, 5) ~ 0,        # not increased
+      TRUE ~ NA_real_
+    )
+  )
+d <- d %>%
+  mutate(
+    blm_support = case_when(
+      blmsup %in% c(1, 2) ~ 1,   # support
+      blmsup %in% c(3, 4, 5) ~ 0, # not support
+      TRUE ~ NA_real_
+    )
+  )
+```
+## Data preparation
+```{r data_prep_tables, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+prep_info <- tibble(
+  Metric = c("Rows in d", "Columns in d"),
+  Value  = c(nrow(d), ncol(d))
+)
+nice_table(prep_info, "Table C:Prepared dataset size after cleaning")
+
+racism_counts <- table(addNA(d$racism_increased))
+racism_tab <- tibble(
+  racism_increased = names(racism_counts),
+  Count = as.integer(racism_counts)
+)
+nice_table(racism_tab, "Outcome distribution (0 / 1 / NA)")
+```
+# Ethnicity labels (from EVENS data dictionary) 
+```{r prep_variables_ethnicity, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+
+ethnicity_labels <- c(
+  `1`  = "White British",
+  `2`  = "White Other",
+  `3`  = "Mixed",
+  `4`  = "Indian",
+  `5`  = "Pakistani",
+  `6`  = "Bangladeshi",
+  `7`  = "Chinese",
+  `8`  = "Other Asian",
+  `9`  = "Black African",
+  `10` = "Black Caribbean",
+  `11` = "Other Black",
+  `12` = "Arab",
+  `13` = "Other ethnic group"
+)
+
+ethnicity_tbl <- tibble(
+  Code = as.integer(names(ethnicity_labels)),
+  Ethnicity = unname(ethnicity_labels)
+)
+
+nice_table(ethnicity_tbl, "Ethnicity codes and labels")
+
+
+```
+```{r helper_formatting}
+fmt_pct <- function(x, digits = 1) paste0(round(100*x, digits), "%")
+fmt_num <- function(x, digits = 3) round(x, digits)
+
+kable_clean <- function(df, caption = NULL) {
+  knitr::kable(df, caption = caption, align = "l")
+}
+```
+## Descriptive analysis
+
+```{r descriptive_stats}
+# Weighted mean of racism increase
+library(survey)
+
+des <- svydesign(
+  ids = ~1,
+  weights = ~weight,
+  data = d
+)
+
+overall_racism <- svymean(
+  ~racism_increased,
+  des,
+  na.rm = TRUE
+)
+
+overall_tbl <- tibble(
+  Outcome = "racism_increased",
+  Mean = round(as.numeric(coef(overall_racism)), 4),
+  `Standard Error` = round(as.numeric(SE(overall_racism)), 4)
+)
+
+nice_table(
+  overall_tbl,
+  "Table D: Overall weighted proportion reporting increased racism (mean and SE)"
+)
+```
+### Types of racism reported (ranked)
+```{r racism_type_ranking, echo=FALSE, message=FALSE, warning=FALSE}
+rac_cols <- c("racins", "racpro", "racatt", "racedu", "racneigh")
+
+racism_ranked <- tibble::tibble(
+  rac_var = rac_cols,
+  Proportion = sapply(rac_cols, function(v) {
+
+    x <- d[[v]]          # plain vector
+    w <- d$weight        # plain vector (same n as d)
+
+    ok <- !is.na(x) & !is.na(w)   # SAME rows for both
+    weighted.mean(x[ok] == 1, w[ok])
+  })
+) %>%
+  dplyr::mutate(
+    `Racism type` = dplyr::recode(rac_var,
+      racins   = "Racist insults",
+      racpro   = "Racist propaganda",
+      racatt   = "Racist attack",
+      racedu   = "Racial discrimination",
+      racneigh = "Online racism"
+    )
+  ) %>%
+  dplyr::select(`Racism type`, Proportion) %>%
+  dplyr::arrange(dplyr::desc(Proportion))
+racism_ranked <- racism_ranked %>%
+  dplyr::filter(!is.na(Proportion))
+
+nice_table(racism_ranked, "Ranked prevalence of reported racism by type")
+```
+
+## Q1: Has racism increased in the UK since the start of the COVID-19 pandemic?
+
+```{r q1_racchng_recode}
+d <- d %>%
+  mutate(
+    racchng_bin = case_when(
+      racchng %in% c(1, 2) ~ "Increased",
+      racchng == 3 ~ "No change",
+      racchng %in% c(4, 5) ~ "Decreased",
+      TRUE ~ NA_character_
+    ),
+    racchng_inc = case_when(
+      racchng %in% c(1, 2) ~ 1,
+      racchng %in% c(3, 4, 5) ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+# IMPORTANT: rebuild survey design after creating new variables
+des <- svydesign(ids = ~1, weights = ~weight, data = d)
+```
+
+```{r q1_racchng_weighted}
+racchng_mean <- svymean(
+  ~factor(racchng_bin),
+  design = des,
+  na.rm = TRUE
+)
+
+racchng_plot <- tibble::tibble(
+  category = gsub("^factor\\(racchng_bin\\)", "", names(coef(racchng_mean))),
+  mean = as.numeric(coef(racchng_mean))
+) %>%
+  mutate(percent = round(mean * 100, 1))
+
+nice_table(
+  racchng_plot %>% select(category, percent),
+  "Change in experiences of racism since COVID (weighted %)"
+)
+```
+```{r q1_racchng_plot, fig.height=4}
+ggplot(racchng_plot, aes(x = category, y = percent, fill = category)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    x = "Change since COVID",
+    y = "Weighted percentage",
+    title = "Perceived change in racism since COVID"
+  ) +
+  theme_minimal()
+```
+
+
+
+## Q1(i):Have experiences of racism by ethnic minority groups increased since the start of the COVID-19 pandemic?
+
+```{r q2_by_ethnicity_table}
+by_eth_racinc <- svyby(
+  ~racchng_inc,
+  ~ethnicity,
+  design = des,
+  svymean,
+  na.rm = TRUE
+) %>%
+  as_tibble() %>%
+  rename(
+    Ethnicity = ethnicity,
+    Mean = racchng_inc,
+    SE = se
+  ) %>%
+  mutate(Percent = round(Mean * 100, 1)) %>%
+  arrange(desc(Percent))
+
+nice_table(by_eth_racinc, "Table E: Reporting weighted racism increased since COVID, by ethnicity. ")
+ggplot(by_eth_racinc, aes(x = reorder(as.factor(Ethnicity), Percent), y = Percent)) +
+  geom_col(fill = "#4C72B0") +
+  coord_flip() +
+  labs(
+    x = "Ethnicity group",
+    y = "Weighted % saying racism increased",
+    title = "Racism increased since COVID: by ethnicity (weighted)"
+  ) +
+  theme_minimal()
+```
+
+
+## Regression analysis
+```{r regression}
+# Survey-weighted logistic regression
+m_any <- svyglm(
+  racism_increased ~ ethnicity + income + hlqual + region + religion,
+  design = des,
+  family = quasibinomial()
+)
+```
+
+
+
+```{r table_g_model_comparison}
+# Null model (intercept only)
+m_null <- svyglm(
+  racism_increased ~ 1,
+  design = des,
+  family = quasibinomial()
+)
+
+# Compare null vs full model (survey-weighted LRT)
+cmp <- anova(m_null, m_any)
+
+# Safely extract values (works with survey's LRT object)
+stat <- if (!is.null(cmp$chisq)) cmp$chisq else cmp$statistic
+df   <- if (!is.null(cmp$df))   cmp$df   else NA
+pval <- if (!is.null(cmp$p))    cmp$p    else cmp$p.value
+
+table_g <- tibble::tibble(
+  Comparison = "Null (intercept only) vs Full model",
+  Test = "Survey-weighted likelihood ratio test",
+  Statistic = round(as.numeric(cmp$chisq), 2),
+  DF = as.integer(cmp$df),
+  `p-value` = ifelse(as.numeric(cmp$p) < 0.001, "<0.001",
+                     signif(as.numeric(cmp$p), 3))
+)
+
+nice_table(table_g, "Table F: Null vs full model comparison (overall model improvement)")
+
+```
+## Q1(ii) Has any particular ethnic minority group experienced greater racism than other groups?
+```{r odds_ratios}
+or_tbl <- broom::tidy(m_any, exponentiate = TRUE, conf.int = TRUE) %>%
+  as_tibble() %>%
+  mutate(
+    term = gsub("^ethnicity", "", term),
+    OR = round(estimate, 2),
+    CI = paste0(round(conf.low, 2), "–", round(conf.high, 2)),
+    p = signif(p.value, 3)
+  ) %>%
+  select(term, OR, CI, p)
+
+nice_table(
+  or_tbl,
+  "Table G: Survey-weighted logistic regression results (odds ratios)"
+)
+
+```
+
+## Q1(iii):What sort of racist experiences have been experienced by ethnic minorities?
+
+```{r q3_prepare_bins}
+racism_items <- c(
+  "racins", "racpro", "racatt", "racedu",
+  "racemp", "racpub", "racpol", "rachse",
+  "racneigh", "racframpart"
+)
+
+# keep only those that exist in your dataset
+racism_items_present <- intersect(racism_items, names(d))
+
+# create binary versions: 1/2 = racism reported, 3/4/5 = not reported
+for (v in racism_items_present) {
+  d[[paste0(v, "_bin")]] <- dplyr::case_when(
+    d[[v]] %in% c(1, 2) ~ 1,
+    d[[v]] %in% c(3, 4, 5) ~ 0,
+    TRUE ~ NA_real_
+  )
+}
+
+# rebuild survey design using updated d (important!)
+des <- svydesign(ids = ~1, weights = ~weight, data = d)
+```
+
+```{r q3_table}
+bin_vars <- paste0(racism_items_present, "_bin")
+
+q3_means <- svymean(
+  as.formula(paste("~", paste(bin_vars, collapse = "+"))),
+  des,
+  na.rm = TRUE
+)
+
+q3_tbl <- tibble(
+  racism_type = gsub("_bin", "", names(coef(q3_means))),
+  proportion = as.numeric(coef(q3_means)),
+  se = as.numeric(SE(q3_means))
+) |>
+  mutate(percent = round(100 * proportion, 1)) |>
+  arrange(desc(percent))
+# Convert EVENS variable codes to readable labels
+racism_labels <- c(
+  racins   = "Verbal abuse",
+  racpub   = "Discrimination in public places",
+  racemp   = "Workplace discrimination",
+  racedu   = "Education discrimination",
+  racneigh = "Neighbourhood harassment",
+  racpol   = "Police discrimination",
+  rachse  = "Housing discrimination",
+  racatt  = "Racist physical attacks"
+)
+
+q3_tbl <- q3_tbl %>%
+  mutate(racism_type = recode(racism_type, !!!racism_labels))
+nice_table(
+  q3_tbl,
+  "Table H:Most reported types of racism (weighted)"
+)
+```
+```{r q3_plot, fig.height=4, fig.width=7}
+ggplot(q3_tbl, aes(x = reorder(racism_type, percent), y = percent)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    x = "Type of racism",
+    y = "Weighted % reporting racism",
+    title = "Types of racism most reported (weighted)"
+  )
+
+```
+
+
+
+
+## Q1(iv): Has support for the “Black lives Matter” anti-racism movement increased and by whom?
+```{r blm_overall}
+# Recode BLM support as binary (support vs not support)
+d <- d %>%
+  mutate(
+    blm_support = case_when(
+      blmsup %in% c(1, 2) ~ 1,   # support
+      blmsup %in% c(3, 4, 5) ~ 0, # not support
+      TRUE ~ NA_real_
+    )
+  )
+
+# Update survey design
+des <- svydesign(ids = ~1, weights = ~weight, data = d)
+
+# Overall weighted support
+blm_overall <- svymean(~blm_support, des, na.rm = TRUE)
+
+blm_tbl <- tibble(
+  Outcome = "Support for Black Lives Matter",
+  Mean = as.numeric(coef(blm_overall)),
+  SE   = as.numeric(SE(blm_overall))
+)
+
+nice_table(blm_tbl, "Overall weighted support for the Black Lives Matter movement")
+```
+
+```{r blm_by_ethnicity}
+blm_eth <- svyby(
+  ~blm_support,
+  ~ethnicity,
+  des,
+  svymean,
+  na.rm = TRUE
+)
+
+blm_eth_tbl <- as_tibble(blm_eth) %>%
+  rename(
+    Ethnicity = ethnicity,
+    Mean = blm_support,
+    SE = se
+  ) %>%
+  arrange(desc(Mean))
+
+nice_table(
+  blm_eth_tbl,
+  "Support for Black Lives Matter by ethnicity (weighted)"
+)
+```
+
+```{r blm_by_ethnicity_table}
+# --- BLM support variable (binary) ---
+# NOTE: change 'blm' below ONLY if your dataset column is named differently
+# (common names: blm, blmsup, blmsupp)
+
+d <- d %>%
+  mutate(
+    blm_support = case_when(
+      blmsup %in% c(1, 2) ~ 1,   # support (e.g., strongly/somewhat)
+      blmsup %in% c(3, 4, 5) ~ 0, # not support
+      TRUE ~ NA_real_
+    )
+  )
+
+# rebuild survey design (important after mutate)
+des <- svydesign(ids = ~1, weights = ~weight, data = d)
+
+# Weighted mean of support by ethnicity
+blm_by_eth <- svyby(
+  ~blm_support,
+  ~ethnicity,
+  des,
+  svymean,
+  na.rm = TRUE
+)
+
+blm_by_eth_tbl <- as_tibble(blm_by_eth) %>%
+  transmute(
+    Ethnicity = ethnicity,
+    Proportion_support = blm_support,
+    SE = se
+  ) %>%
+  mutate(
+    Percent_support = round(100 * Proportion_support, 1),
+    Proportion_support = round(Proportion_support, 3),
+    SE = round(SE, 3)
+  ) %>%
+  arrange(desc(Percent_support))
+
+nice_table(blm_by_eth_tbl, "Table I:Survey weighted BLM support by ethnicity")
+ggplot(
+  blm_by_eth_tbl %>% arrange(desc(Percent_support)),
+  aes(x = reorder(Ethnicity, -Percent_support), y = Percent_support)
+) +
+  geom_col(fill = "#5A7FA6") +
+  labs(
+    title = "Support for the Black Lives Matter movement by ethnicity",
+    x = "Ethnicity",
+    y = "Percentage supporting BLM (survey-weighted)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+
+### BLM Model Evaluation: Comparison with Null Model
+```{r blm_model_test, echo=FALSE, message=FALSE, warning=FALSE}
+# Full BLM model (define here so m_blm always exists during knit)
+m_blm <- svyglm(
+  blm_support ~ ethnicity + income + hlqual + region + religion,
+  design = des,
+  family = quasibinomial()
+)
+
+# Overall model test (survey-weighted LRT)
+blm_lrt <- survey::regTermTest(
+  m_blm,
+  ~ ethnicity + income + hlqual + region + religion,
+  method = "LRT"
+)
+
+blm_table <- tibble::tibble(
+  Comparison = "Intercept-only vs Full BLM model",
+  Test = "Survey-weighted likelihood ratio test",
+  Statistic = round(as.numeric(blm_lrt$chisq), 2),
+  DF = as.integer(blm_lrt$df),
+  `p-value` = signif(as.numeric(blm_lrt$p), 3)
+)
+
+nice_table(blm_table, "Survey-weighted likelihood ratio test comparing the null and full BLM support model")
+```
+### Activity 4 – Regression interpretation
+
+**Key findings**
+
+- Several ethnic minority groups have higher odds of reporting increased racism than the reference group.
+- Lower income categories show higher odds of reporting increased racism.
+- The full model fits better than the null model; results are associative, not causal.
+
+The survey-weighted logistic regression examines the association between ethnicity and the likelihood of reporting an increase in racism, adjusting for income, highest qualification (hlqual), region, and religion. Several ethnic minority groups exhibit significantly higher odds compared with the reference group. For example, respondents identifying as White Other (OR = 3.37, 95% CI 1.88–6.03), Pakistani (OR = 2.14, 95% CI 1.25–3.68), Chinese (OR = 1.95, 95% CI 1.04–3.66), Other Asian (OR = 2.31, 95% CI 1.11–4.80), and Black African (OR = 1.88, 95% CI 1.03–3.44) show elevated odds of reporting increased racism. Other ethnic categories are not statistically different from the reference group, as their confidence intervals include one.
+
+Income is also associated with the outcome, with respondents in the lowest income categories displaying higher odds of reporting increased racism (e.g., income1 OR = 4.51, 95% CI 1.68–12.12; income2 OR = 2.88, 95% CI 1.38–5.98). Some religion categories are associated with higher or lower odds, while most regional and qualification variables are not statistically significant. Overall, the full model provides a significantly better fit than the null model; however, as the analysis is based on observational survey data, the findings describe associations and do not imply causality.
